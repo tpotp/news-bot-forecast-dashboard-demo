@@ -67,5 +67,6 @@ def test_auth_cookie_validation_accepts_only_expected_token() -> None:
     assert not forecast_dashboard._cookie_is_valid("forecast_dashboard_auth=wrong", password)
 
 
-def test_auth_cookie_validation_allows_local_mode_without_password() -> None:
-    assert forecast_dashboard._cookie_is_valid("", "")
+def test_auth_cookie_validation_uses_default_demo_token() -> None:
+    assert forecast_dashboard._configured_password_token() == forecast_dashboard.DEFAULT_DEMO_PASSWORD_TOKEN
+    assert not forecast_dashboard._cookie_is_valid("")

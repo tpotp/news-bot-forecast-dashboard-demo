@@ -38,6 +38,7 @@ DEFAULT_HOST = os.environ.get("HOST", "0.0.0.0" if "PORT" in os.environ else "12
 DEFAULT_PORT = int(os.environ.get("PORT", "8090"))
 AUTH_COOKIE_NAME = "forecast_dashboard_auth"
 AUTH_COOKIE_MAX_AGE = 60 * 60 * 12
+DEFAULT_DEMO_PASSWORD_TOKEN = "f586ca415f105ac81e6d84f2284cb48899192a7df29c0b939096666d220fe7ea"
 
 
 class DashboardServer(socketserver.ThreadingTCPServer):
@@ -58,6 +59,13 @@ def _auth_token(password: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _configured_password_token() -> str:
+    password = _configured_password()
+    if password:
+        return _auth_token(password)
+    return os.environ.get("DASHBOARD_PASSWORD_TOKEN", DEFAULT_DEMO_PASSWORD_TOKEN).strip()
+
+
 def _parse_cookies(header: str) -> Dict[str, str]:
     cookies: Dict[str, str] = {}
     for part in header.split(";"):
@@ -68,12 +76,13 @@ def _parse_cookies(header: str) -> Dict[str, str]:
     return cookies
 
 
-def _cookie_is_valid(cookie_header: str, password: str) -> bool:
-    if not password:
+def _cookie_is_valid(cookie_header: str, password: str = "") -> bool:
+    expected_token = _auth_token(password) if password else _configured_password_token()
+    if not expected_token:
         return True
     cookies = _parse_cookies(cookie_header)
     token = cookies.get(AUTH_COOKIE_NAME, "")
-    return hmac.compare_digest(token, _auth_token(password))
+    return hmac.compare_digest(token, expected_token)
 
 
 def _render_login(message: str = "") -> str:
@@ -237,7 +246,7 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
         return "; Secure" if proto == "https" else ""
 
     def _is_authenticated(self) -> bool:
-        return _cookie_is_valid(self.headers.get("Cookie", ""), _configured_password())
+        return _cookie_is_valid(self.headers.get("Cookie", ""))
 
     def _require_auth(self) -> bool:
         if self._is_authenticated():
@@ -246,11 +255,11 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
         return False
 
     def _handle_login(self, form: Dict[str, List[str]]) -> None:
-        password = _configured_password()
+        expected_token = _configured_password_token()
         submitted = form.get("password", [""])[0]
-        if password and hmac.compare_digest(submitted, password):
+        if expected_token and hmac.compare_digest(_auth_token(submitted), expected_token):
             cookie = (
-                f"{AUTH_COOKIE_NAME}={_auth_token(password)}; Path=/; HttpOnly; "
+                f"{AUTH_COOKIE_NAME}={expected_token}; Path=/; HttpOnly; "
                 f"SameSite=Lax; Max-Age={AUTH_COOKIE_MAX_AGE}{self._secure_cookie_suffix()}"
             )
             self._redirect("/", {"Set-Cookie": cookie})
