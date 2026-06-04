@@ -59,3 +59,13 @@ def test_event_status_waits_only_when_forecast_missing() -> None:
     assert forecast_dashboard._event_status("85K") == "listo"
     assert forecast_dashboard._event_status("") == "esperando_forecast"
 
+
+def test_auth_cookie_validation_accepts_only_expected_token() -> None:
+    password = "demo-secret"
+    token = forecast_dashboard._auth_token(password)
+    assert forecast_dashboard._cookie_is_valid(f"forecast_dashboard_auth={token}", password)
+    assert not forecast_dashboard._cookie_is_valid("forecast_dashboard_auth=wrong", password)
+
+
+def test_auth_cookie_validation_allows_local_mode_without_password() -> None:
+    assert forecast_dashboard._cookie_is_valid("", "")

@@ -12,6 +12,8 @@ not, the server binds to 0.0.0.0 so platforms like Render/Railway can route it.
 from __future__ import annotations
 
 from dataclasses import asdict
+import hashlib
+import hmac
 import html
 import http.server
 import json
@@ -34,6 +36,8 @@ from ff_calendar import (
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_HOST = os.environ.get("HOST", "0.0.0.0" if "PORT" in os.environ else "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("PORT", "8090"))
+AUTH_COOKIE_NAME = "forecast_dashboard_auth"
+AUTH_COOKIE_MAX_AGE = 60 * 60 * 12
 
 
 class DashboardServer(socketserver.ThreadingTCPServer):
@@ -43,6 +47,69 @@ class DashboardServer(socketserver.ThreadingTCPServer):
 
 def _event_status(forecast: str) -> str:
     return "listo" if forecast.strip() else "esperando_forecast"
+
+
+def _configured_password() -> str:
+    return os.environ.get("DASHBOARD_PASSWORD", "").strip()
+
+
+def _auth_token(password: str) -> str:
+    payload = f"forecast-dashboard:{password}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _parse_cookies(header: str) -> Dict[str, str]:
+    cookies: Dict[str, str] = {}
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        cookies[name.strip()] = value.strip()
+    return cookies
+
+
+def _cookie_is_valid(cookie_header: str, password: str) -> bool:
+    if not password:
+        return True
+    cookies = _parse_cookies(cookie_header)
+    token = cookies.get(AUTH_COOKIE_NAME, "")
+    return hmac.compare_digest(token, _auth_token(password))
+
+
+def _render_login(message: str = "") -> str:
+    message_html = f"<p class='message'>{html.escape(message)}</p>" if message else ""
+    return f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acceso Forecast Calendar</title>
+  <style>
+    :root {{ --bg:#101216; --panel:#1d222b; --line:#303846; --text:#f4f7fb; --muted:#9ba7b8; --blue:#1f6feb; --red:#ef4444; }}
+    body {{ margin:0; min-height:100vh; display:grid; place-items:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
+    main {{ width:min(420px, calc(100vw - 32px)); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:22px; box-sizing:border-box; }}
+    h1 {{ margin:0 0 8px; font-size:22px; }}
+    p {{ margin:0 0 18px; color:var(--muted); }}
+    label {{ display:block; margin-bottom:8px; color:#bfdbfe; font-weight:700; }}
+    input {{ width:100%; box-sizing:border-box; background:#111827; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:11px; font-size:16px; }}
+    button {{ width:100%; margin-top:14px; border:1px solid var(--blue); background:var(--blue); color:white; padding:11px 12px; border-radius:6px; cursor:pointer; font-weight:800; }}
+    .message {{ color:#fecaca; background:#3b1117; border:1px solid var(--red); border-radius:6px; padding:10px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Acceso privado</h1>
+    <p>Calendario protegido para paper trading.</p>
+    {message_html}
+    <form method="post" action="/login">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus>
+      <button type="submit">Entrar</button>
+    </form>
+  </main>
+</body>
+</html>
+"""
 
 
 def _checked(event: CalendarEvent, previous_selection: Dict[str, str]) -> bool:
@@ -123,6 +190,7 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
       </div>
       <div class="toolbar">
         <a class="button" href="/refresh">Refrescar FF</a>
+        <a class="button" href="/logout">Salir</a>
         <button form="calendarForm" class="primary" type="submit">Guardar seleccion</button>
       </div>
     </header>
@@ -147,17 +215,60 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
 class ForecastHandler(http.server.BaseHTTPRequestHandler):
     events: List[CalendarEvent] = []
 
-    def _send_html(self, body: str, status: int = 200) -> None:
+    def _send_html(self, body: str, status: int = 200, extra_headers: Dict[str, str] | None = None) -> None:
         encoded = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _redirect(self, location: str, extra_headers: Dict[str, str] | None = None) -> None:
+        self.send_response(303)
+        self.send_header("Location", location)
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+
+    def _secure_cookie_suffix(self) -> str:
+        proto = self.headers.get("X-Forwarded-Proto", "")
+        return "; Secure" if proto == "https" else ""
+
+    def _is_authenticated(self) -> bool:
+        return _cookie_is_valid(self.headers.get("Cookie", ""), _configured_password())
+
+    def _require_auth(self) -> bool:
+        if self._is_authenticated():
+            return True
+        self._send_html(_render_login(), status=401)
+        return False
+
+    def _handle_login(self, form: Dict[str, List[str]]) -> None:
+        password = _configured_password()
+        submitted = form.get("password", [""])[0]
+        if password and hmac.compare_digest(submitted, password):
+            cookie = (
+                f"{AUTH_COOKIE_NAME}={_auth_token(password)}; Path=/; HttpOnly; "
+                f"SameSite=Lax; Max-Age={AUTH_COOKIE_MAX_AGE}{self._secure_cookie_suffix()}"
+            )
+            self._redirect("/", {"Set-Cookie": cookie})
+            return
+        self._send_html(_render_login("Password incorrecto."), status=401)
 
     def do_GET(self) -> None:
         if self.path.startswith("/healthz"):
             self._send_html("ok")
+            return
+        if self.path.startswith("/login"):
+            self._send_html(_render_login())
+            return
+        if self.path.startswith("/logout"):
+            cookie = f"{AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{self._secure_cookie_suffix()}"
+            self._redirect("/login", {"Set-Cookie": cookie})
+            return
+        if not self._require_auth():
             return
         if self.path.startswith("/refresh") or not self.events:
             try:
@@ -170,12 +281,17 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
         self._send_html(render_dashboard(self.events, message=message))
 
     def do_POST(self) -> None:
-        if self.path != "/save":
-            self.send_error(404)
-            return
         length = int(self.headers.get("Content-Length", "0"))
         payload = self.rfile.read(length).decode("utf-8")
         form = parse_qs(payload, keep_blank_values=True)
+        if self.path == "/login":
+            self._handle_login(form)
+            return
+        if not self._require_auth():
+            return
+        if self.path != "/save":
+            self.send_error(404)
+            return
         events_json = form.get("events_json", ["[]"])[0]
         events = json.loads(events_json)
         rows: List[Dict[str, str]] = []
