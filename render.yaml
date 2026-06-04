@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: news-bot-forecast-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python forecast_dashboard.py
+    healthCheckPath: /healthz
+    autoDeploy: true
