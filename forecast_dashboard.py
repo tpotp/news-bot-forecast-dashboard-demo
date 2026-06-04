@@ -19,6 +19,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
 import socketserver
 from typing import Any, Dict, List
 from urllib.parse import parse_qs
@@ -31,6 +32,7 @@ from ff_calendar import (
     load_selected_forecasts,
     write_manual_forecasts,
 )
+from research_state import RESEARCH_STATE, build_conditional_report_markdown, ensure_conditional_report
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -48,6 +50,85 @@ class DashboardServer(socketserver.ThreadingTCPServer):
 
 def _event_status(forecast: str) -> str:
     return "listo" if forecast.strip() else "esperando_forecast"
+
+
+def _event_runtime_status(forecast: str, actual: str) -> str:
+    if not forecast.strip():
+        return "esperando_forecast"
+    if not actual.strip():
+        return "esperando_actual"
+    return "paper_signal"
+
+
+def _parse_macro_value(value: str) -> float | None:
+    text = value.strip().replace(",", "")
+    if not text:
+        return None
+    multiplier = 1.0
+    if text.endswith("%"):
+        text = text[:-1]
+    if text.upper().endswith("K"):
+        multiplier = 1_000.0
+        text = text[:-1]
+    elif text.upper().endswith("M"):
+        multiplier = 1_000_000.0
+        text = text[:-1]
+    elif text.upper().endswith("B"):
+        multiplier = 1_000_000_000.0
+        text = text[:-1]
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    return float(match.group(0)) * multiplier
+
+
+def _event_surprise(title: str, actual: str, forecast: str) -> Dict[str, str]:
+    actual_value = _parse_macro_value(actual)
+    forecast_value = _parse_macro_value(forecast)
+    if actual_value is None or forecast_value is None:
+        return {
+            "surprise": "",
+            "signal": "sin_senal",
+            "reason": "actual/forecast no numerico",
+        }
+    diff = actual_value - forecast_value
+    lower_title = title.lower()
+    inverse_growth = any(key in lower_title for key in ["unemployment", "jobless", "claims"])
+    inflation_bad = any(key in lower_title for key in ["cpi", "inflation", "pce", "prices", "earnings"])
+    growth_good = any(
+        key in lower_title
+        for key in ["non-farm", "employment", "pmi", "retail", "gdp", "durable", "manufacturing", "services"]
+    )
+
+    if abs(diff) < 1e-12:
+        signal = "sin_senal"
+        reason = "actual igual al forecast"
+    elif inverse_growth:
+        signal = "paper_long_es" if diff < 0 else "paper_short_es"
+        reason = "menor desempleo/claims favorece riesgo; mayor dato lo presiona"
+    elif inflation_bad:
+        signal = "paper_short_es" if diff > 0 else "paper_long_es"
+        reason = "inflacion/salarios sobre forecast endurece tasas; menor dato favorece riesgo"
+    elif growth_good:
+        signal = "paper_long_es" if diff > 0 else "paper_short_es"
+        reason = "crecimiento/empleo sobre forecast favorece riesgo en modo paper"
+    else:
+        signal = "observacion"
+        reason = "evento sin mapa direccional validado"
+
+    return {
+        "surprise": f"{diff:g}",
+        "signal": signal,
+        "reason": reason,
+    }
+
+
+def _signal_badge_class(signal: str) -> str:
+    if "long" in signal:
+        return "ready"
+    if "short" in signal:
+        return "danger"
+    return "waiting"
 
 
 def _configured_password() -> str:
@@ -131,10 +212,13 @@ def _render_event_row(event: CalendarEvent, selected: Dict[str, Dict[str, str]])
     previous = selected.get(event.id, {})
     forecast = previous.get("forecast") or event.forecast
     previous_value = previous.get("previous") or event.previous
+    actual = previous.get("actual") or event.actual
     notes = previous.get("notes", "")
     checked = "checked" if _checked(event, previous) else ""
-    status = _event_status(forecast)
-    status_class = "ready" if status == "listo" else "waiting"
+    status = _event_runtime_status(forecast, actual)
+    paper = _event_surprise(event.title, actual, forecast) if actual else {"signal": "esperando_actual", "surprise": "", "reason": ""}
+    status_class = "ready" if status == "paper_signal" else "waiting"
+    signal_class = _signal_badge_class(paper["signal"])
     return f"""
     <tr>
       <td><input type="checkbox" name="select_{html.escape(event.id)}" {checked}></td>
@@ -143,10 +227,91 @@ def _render_event_row(event: CalendarEvent, selected: Dict[str, Dict[str, str]])
       <td>{html.escape(event.country)}</td>
       <td><strong>{html.escape(event.title)}</strong><br><span>{html.escape(event.source)}</span></td>
       <td><input name="forecast_{html.escape(event.id)}" value="{html.escape(forecast)}" placeholder="forecast"></td>
+      <td><input name="actual_{html.escape(event.id)}" value="{html.escape(actual)}" placeholder="actual"></td>
       <td><input name="previous_{html.escape(event.id)}" value="{html.escape(previous_value)}" placeholder="previous"></td>
       <td><span class="status {status_class}">{html.escape(status)}</span></td>
+      <td><span title="{html.escape(paper['reason'])}" class="status {signal_class}">{html.escape(paper['signal'])}</span><br><span>{html.escape(paper['surprise'])}</span></td>
       <td><input name="notes_{html.escape(event.id)}" value="{html.escape(notes)}" placeholder="notas"></td>
     </tr>
+    """
+
+
+def _render_score_gauge(score: int, label: str) -> str:
+    clamped = max(0, min(100, score))
+    return f"""
+    <section class="gauge-wrap" aria-label="Health Score">
+      <div class="gauge">
+        <div class="needle" style="transform:rotate({-90 + (clamped * 1.8):.1f}deg)"></div>
+        <div class="gauge-center">
+          <strong>{clamped}</strong>
+          <span>{html.escape(label)}</span>
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _render_research_cockpit() -> str:
+    state = RESEARCH_STATE
+    penalties = "".join(f"<li>{html.escape(item)}</li>" for item in state["penalties"])
+    required = "".join(f"<li>{html.escape(item)}</li>" for item in state["required_next_data"])
+    strategy_rows = "\n".join(
+        f"""
+        <tr>
+          <td><strong>{html.escape(strategy['name'])}</strong><br><span>{html.escape(strategy['rule'])}</span></td>
+          <td><span class="status {'ready' if strategy['status'] == 'conditional_candidate' else 'danger'}">{html.escape(strategy['status'])}</span></td>
+          <td>{strategy['trades']}</td>
+          <td>{strategy['compound_return_pct']:.2f}%</td>
+          <td>{strategy['sharpe']:.3f}</td>
+          <td>{strategy['dsr']:.3f}</td>
+          <td>{html.escape(strategy['rejection'])}</td>
+        </tr>
+        """
+        for strategy in state["strategies"]
+    )
+    return f"""
+    <section class="cockpit">
+      <div class="cockpit-head">
+        <div>
+          <p class="eyebrow">Macro Announcement Trading System V4</p>
+          <h1>Control room paper-only</h1>
+          <p class="note">El sitio ahora refleja el veredicto cuantitativo: <strong>{html.escape(state['decision'])}</strong>. No hay champion aprobado ni live trading.</p>
+        </div>
+        {_render_score_gauge(int(state['health_score']), str(state['health_label']))}
+      </div>
+      <div class="metric-grid">
+        <div class="metric"><span>Salida final</span><strong>{html.escape(state['final_output'])}</strong></div>
+        <div class="metric"><span>Savor-Wilson Sharpe</span><strong>{state['savor_wilson']['ann_sharpe']:.3f}</strong></div>
+        <div class="metric"><span>Walk-forward</span><strong>{state['walk_forward']['splits_accepted']}/{state['walk_forward']['splits_total']}</strong></div>
+        <div class="metric"><span>IBKR Paper</span><strong>7497 only</strong></div>
+      </div>
+      <div class="warning-band">
+        Paper trading solamente. Render no puede alcanzar IBKR Desktop local en 127.0.0.1:7497; live trading esta deshabilitado.
+      </div>
+      <section class="panel research-panel">
+        <h2>Estrategias V4</h2>
+        <table class="strategy-table">
+          <thead>
+            <tr><th>Estrategia</th><th>Estado</th><th>Trades</th><th>Retorno</th><th>Sharpe</th><th>DSR</th><th>Condicion/Rechazo</th></tr>
+          </thead>
+          <tbody>{strategy_rows}</tbody>
+        </table>
+      </section>
+      <div class="two-col">
+        <section class="panel compact">
+          <h2>Penalizaciones activas</h2>
+          <ul>{penalties}</ul>
+        </section>
+        <section class="panel compact">
+          <h2>Datos necesarios</h2>
+          <ul>{required}</ul>
+        </section>
+      </div>
+      <div class="toolbar report-toolbar">
+        <a class="button" href="/conditional_report.md">Ver conditional_report.md</a>
+        <a class="button" href="/healthz">Health check</a>
+      </div>
+    </section>
     """
 
 
@@ -163,17 +328,39 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Forecast Calendar</title>
   <style>
-    :root {{ --bg:#101216; --panel:#1d222b; --line:#303846; --text:#f4f7fb; --muted:#9ba7b8; --green:#22c55e; --amber:#f59e0b; --red:#ef4444; }}
+    :root {{ --bg:#101216; --panel:#1d222b; --line:#303846; --text:#f4f7fb; --muted:#9ba7b8; --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --blue:#1f6feb; }}
     body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }}
     main {{ max-width:1280px; margin:0 auto; padding:22px; }}
     header {{ display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:16px; }}
     h1 {{ margin:0; font-size:24px; }}
+    h2 {{ margin:0 0 10px; font-size:18px; }}
     p {{ color:var(--muted); }}
+    ul {{ margin:0; padding-left:20px; color:var(--muted); }}
+    li {{ margin:6px 0; }}
     .toolbar {{ display:flex; gap:10px; flex-wrap:wrap; }}
     button, .button {{ border:1px solid var(--line); background:#243044; color:var(--text); padding:10px 12px; border-radius:6px; cursor:pointer; text-decoration:none; font-weight:700; }}
-    button.primary {{ background:#1f6feb; }}
-    .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:auto; }}
-    table {{ width:100%; border-collapse:collapse; min-width:1120px; }}
+    button.primary {{ background:var(--blue); }}
+    .cockpit {{ margin-bottom:24px; }}
+    .cockpit-head {{ display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:14px; }}
+    .eyebrow {{ margin:0 0 6px; color:#bfdbfe; font-weight:800; text-transform:uppercase; font-size:12px; letter-spacing:0; }}
+    .metric-grid {{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; margin:12px 0; }}
+    .metric {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }}
+    .metric span {{ display:block; color:var(--muted); font-size:12px; margin-bottom:6px; }}
+    .metric strong {{ font-size:18px; }}
+    .warning-band {{ background:#3a2811; border:1px solid #a16207; color:#fde68a; border-radius:8px; padding:12px; margin:12px 0; font-weight:700; }}
+    .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:auto; margin-top:12px; }}
+    .research-panel {{ padding:14px; }}
+    .compact {{ padding:14px; min-height:160px; }}
+    .two-col {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
+    .report-toolbar {{ margin-top:12px; }}
+    .gauge-wrap {{ width:170px; flex:0 0 170px; }}
+    .gauge {{ position:relative; width:170px; height:96px; overflow:hidden; border-radius:170px 170px 0 0; background:conic-gradient(from 270deg at 50% 100%, #ef4444 0deg 60deg, #f59e0b 60deg 125deg, #22c55e 125deg 180deg); border:1px solid var(--line); }}
+    .needle {{ position:absolute; bottom:0; left:50%; width:3px; height:78px; background:#f8fafc; transform-origin:bottom center; }}
+    .gauge-center {{ position:absolute; bottom:-1px; left:50%; transform:translateX(-50%); width:94px; height:58px; border-radius:94px 94px 0 0; background:var(--bg); display:grid; place-items:center; align-content:center; border:1px solid var(--line); border-bottom:0; }}
+    .gauge-center strong {{ font-size:24px; line-height:1; }}
+    .gauge-center span {{ color:var(--muted); font-size:12px; }}
+    table {{ width:100%; border-collapse:collapse; min-width:1260px; }}
+    .strategy-table {{ min-width:1040px; }}
     th, td {{ border-bottom:1px solid var(--line); padding:10px; text-align:left; vertical-align:middle; font-size:13px; }}
     th {{ color:#bfdbfe; background:#161b24; position:sticky; top:0; }}
     td span {{ color:var(--muted); font-size:12px; }}
@@ -186,16 +373,23 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
     .status {{ display:inline-block; padding:5px 8px; border-radius:6px; font-weight:800; color:#111; }}
     .ready {{ background:var(--green); }}
     .waiting {{ background:var(--amber); }}
+    .danger {{ background:var(--red); color:white; }}
     .message {{ padding:10px 12px; background:#13251b; border:1px solid #1f6b3a; border-radius:8px; color:#d1fae5; }}
     .note {{ color:var(--muted); font-size:12px; max-width:780px; }}
+    @media (max-width: 860px) {{
+      .cockpit-head, header {{ display:block; }}
+      .gauge-wrap {{ margin-top:14px; }}
+      .metric-grid, .two-col {{ grid-template-columns:1fr; }}
+    }}
   </style>
 </head>
 <body>
   <main>
+    {_render_research_cockpit()}
     <header>
       <div>
-        <h1>Calendario ForexFactory para paper trading</h1>
-        <p class="note">Auto-rellena forecast y previous desde el export JSON semanal. Edita solo si falta o quieres sobrescribir. Guardar crea <code>out/data/manual_forecasts.csv</code>.</p>
+        <h1>Calendario ForexFactory y paper signals</h1>
+        <p class="note">Auto-rellena forecast/previous desde el export JSON semanal. Si despues del release agregas actual, calcula una senal paper para forward-test. No envia ordenes reales.</p>
       </div>
       <div class="toolbar">
         <a class="button" href="/refresh">Refrescar FF</a>
@@ -209,7 +403,7 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
       <section class="panel">
         <table>
           <thead>
-            <tr><th>Usar</th><th>Fecha</th><th>Impacto</th><th>Moneda</th><th>Evento</th><th>Forecast</th><th>Previous</th><th>Estado</th><th>Notas</th></tr>
+            <tr><th>Usar</th><th>Fecha</th><th>Impacto</th><th>Moneda</th><th>Evento</th><th>Forecast</th><th>Actual</th><th>Previous</th><th>Estado</th><th>Paper signal</th><th>Notas</th></tr>
           </thead>
           <tbody>{rows}</tbody>
         </table>
@@ -231,6 +425,14 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         for name, value in (extra_headers or {}).items():
             self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _send_text(self, body: str, status: int = 200, content_type: str = "text/plain; charset=utf-8") -> None:
+        encoded = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
 
@@ -279,6 +481,9 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
             return
         if not self._require_auth():
             return
+        if self.path.startswith("/conditional_report.md"):
+            self._send_text(build_conditional_report_markdown(), content_type="text/markdown; charset=utf-8")
+            return
         if self.path.startswith("/refresh") or not self.events:
             try:
                 self.events = fetch_forexfactory_weekly_events()
@@ -309,6 +514,7 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
             if f"select_{event_id}" not in form:
                 continue
             forecast = form.get(f"forecast_{event_id}", [""])[0].strip()
+            actual = form.get(f"actual_{event_id}", [""])[0].strip()
             previous = form.get(f"previous_{event_id}", [""])[0].strip()
             notes = form.get(f"notes_{event_id}", [""])[0].strip()
             rows.append(
@@ -321,9 +527,10 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
                     "time_et": str(event["time_et"]),
                     "time_santiago": str(event["time_santiago"]),
                     "forecast": forecast,
+                    "actual": actual,
                     "previous": previous,
                     "source": "forexfactory_weekly_json_user_confirmed",
-                    "status": _event_status(forecast),
+                    "status": _event_runtime_status(forecast, actual),
                     "notes": notes,
                 }
             )
@@ -336,6 +543,7 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> int:
+    ensure_conditional_report()
     candidates = [port] if "PORT" in os.environ else range(port, port + 10)
     for candidate in candidates:
         try:

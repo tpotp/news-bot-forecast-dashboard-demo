@@ -39,6 +39,7 @@ class CalendarEvent:
     time_santiago: str
     forecast: str
     previous: str
+    actual: str = ""
     source: str = "forexfactory_weekly_json"
 
 
@@ -74,6 +75,7 @@ def normalize_ff_event(raw: Dict[str, Any]) -> CalendarEvent:
         time_santiago=dt_santiago.strftime("%H:%M"),
         forecast=str(raw.get("forecast", "")).strip(),
         previous=str(raw.get("previous", "")).strip(),
+        actual=str(raw.get("actual", "")).strip(),
     )
 
 
@@ -139,6 +141,7 @@ def write_manual_forecasts(rows: List[Dict[str, str]], path: Path | None = None)
         "time_santiago",
         "forecast",
         "previous",
+        "actual",
         "source",
         "status",
         "notes",
@@ -148,4 +151,3 @@ def write_manual_forecasts(rows: List[Dict[str, str]], path: Path | None = None)
         writer.writeheader()
         writer.writerows(rows)
     (DATA_DIR / "selected_ff_events.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
-

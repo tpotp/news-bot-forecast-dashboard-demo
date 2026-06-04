@@ -58,6 +58,23 @@ def test_filter_events_defaults_to_usd_medium_high() -> None:
 def test_event_status_waits_only_when_forecast_missing() -> None:
     assert forecast_dashboard._event_status("85K") == "listo"
     assert forecast_dashboard._event_status("") == "esperando_forecast"
+    assert forecast_dashboard._event_runtime_status("85K", "") == "esperando_actual"
+    assert forecast_dashboard._event_runtime_status("85K", "100K") == "paper_signal"
+
+
+def test_macro_value_parser_handles_units() -> None:
+    assert forecast_dashboard._parse_macro_value("85K") == 85000
+    assert forecast_dashboard._parse_macro_value("6.87M") == 6870000
+    assert forecast_dashboard._parse_macro_value("4.3%") == 4.3
+
+
+def test_paper_signal_direction_rules() -> None:
+    nfp = forecast_dashboard._event_surprise("Non-Farm Employment Change", "120K", "85K")
+    unemployment = forecast_dashboard._event_surprise("Unemployment Rate", "4.5%", "4.3%")
+    cpi = forecast_dashboard._event_surprise("Core CPI m/m", "0.4%", "0.3%")
+    assert nfp["signal"] == "paper_long_es"
+    assert unemployment["signal"] == "paper_short_es"
+    assert cpi["signal"] == "paper_short_es"
 
 
 def test_auth_cookie_validation_accepts_only_expected_token() -> None:
