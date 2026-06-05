@@ -295,6 +295,33 @@ def _render_validation_sources() -> str:
     """
 
 
+def _render_edge_lab() -> str:
+    rows = "\n".join(
+        f"""
+        <tr>
+          <td><strong>{html.escape(edge['name'])}</strong><br><a href="{html.escape(edge['source_url'], quote=True)}" target="_blank" rel="noreferrer">{html.escape(edge['source_name'])}</a></td>
+          <td><span class="status {_source_status_class('missing' if edge['status'] == 'hard_stop' else 'partial')}">{html.escape(edge['status'])}</span></td>
+          <td>{html.escape(edge['evidence'])}</td>
+          <td>{html.escape(edge['implementation'])}</td>
+          <td><span class="status {'danger' if edge['promise_policy'] == 'never_promise' else 'waiting'}">{html.escape(edge['promise_policy'])}</span></td>
+        </tr>
+        """
+        for edge in RESEARCH_STATE["edge_lab"]
+    )
+    return f"""
+      <section class="panel research-panel">
+        <h2>Edge Lab: de humano ganador a sistema medible</h2>
+        <p class="note">Aqui estan los caminos que si tienen evidencia publica. Ninguno autoriza prometer ganancias; solo autoriza experimentos con gates duros.</p>
+        <table class="edge-table">
+          <thead>
+            <tr><th>Candidato</th><th>Estado</th><th>Evidencia</th><th>Implementacion</th><th>Politica</th></tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </section>
+    """
+
+
 def _render_research_cockpit() -> str:
     state = RESEARCH_STATE
     penalties = "".join(f"<li>{html.escape(item)}</li>" for item in state["penalties"])
@@ -332,6 +359,7 @@ def _render_research_cockpit() -> str:
       <div class="warning-band">
         Paper trading solamente. Render no puede alcanzar IBKR Desktop local en 127.0.0.1:7497; live trading esta deshabilitado.
       </div>
+      {_render_edge_lab()}
       {_render_validation_sources()}
       <section class="panel research-panel">
         <h2>Estrategias V4</h2>
@@ -354,6 +382,7 @@ def _render_research_cockpit() -> str:
       </div>
       <div class="toolbar report-toolbar">
         <a class="button" href="/conditional_report.md">Ver conditional_report.md</a>
+        <a class="button" href="/edge_lab.json">Ver edge_lab.json</a>
         <a class="button" href="/validation_sources.json">Ver validation_sources.json</a>
         <a class="button" href="/healthz">Health check</a>
       </div>
@@ -407,6 +436,9 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
     .gauge-center span {{ color:var(--muted); font-size:12px; }}
     table {{ width:100%; border-collapse:collapse; min-width:1260px; }}
     .strategy-table {{ min-width:1040px; }}
+    .edge-table {{ min-width:1180px; }}
+    .edge-table a {{ color:#93c5fd; display:inline-block; margin-top:2px; text-decoration:none; font-weight:700; }}
+    .edge-table a:hover {{ text-decoration:underline; }}
     .source-table {{ min-width:1160px; }}
     .source-table a {{ color:#93c5fd; display:inline-block; margin:2px 8px 0 0; text-decoration:none; font-weight:700; }}
     .source-table a:hover {{ text-decoration:underline; }}
@@ -532,6 +564,10 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path.startswith("/conditional_report.md"):
             self._send_text(build_conditional_report_markdown(), content_type="text/markdown; charset=utf-8")
+            return
+        if self.path.startswith("/edge_lab.json"):
+            body = json.dumps(RESEARCH_STATE["edge_lab"], ensure_ascii=False, indent=2)
+            self._send_text(body, content_type="application/json; charset=utf-8")
             return
         if self.path.startswith("/validation_sources.json"):
             body = json.dumps(RESEARCH_STATE["validation_sources"], ensure_ascii=False, indent=2)

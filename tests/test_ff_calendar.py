@@ -97,8 +97,18 @@ def test_validation_sources_make_missing_consensus_explicit() -> None:
     assert consensus["blocks_champion"]
 
 
+def test_edge_lab_keeps_guarantee_filter_as_hard_stop() -> None:
+    edges = research_state.RESEARCH_STATE["edge_lab"]
+    guarantee_filter = next(edge for edge in edges if edge["name"] == "Guarantee filter")
+    assert guarantee_filter["status"] == "hard_stop"
+    assert guarantee_filter["promise_policy"] == "never_promise"
+
+
 def test_conditional_report_lists_validation_sources() -> None:
     report = research_state.build_conditional_report_markdown()
+    assert "## Edge lab" in report
+    assert "SF Fed USMPD" in report
+    assert "Guarantee filter" in report
     assert "## Fuentes de validacion" in report
     assert "BLS Public Data API" in report
     assert "Forecast consensus" in report
@@ -107,6 +117,10 @@ def test_conditional_report_lists_validation_sources() -> None:
 
 def test_dashboard_renders_validation_source_matrix() -> None:
     rendered = forecast_dashboard.render_dashboard([])
+    assert "Edge Lab: de humano ganador a sistema medible" in rendered
+    assert "edge_lab.json" in rendered
+    assert "FOMC high-frequency shock model" in rendered
+    assert "never_promise" in rendered
     assert "Fuentes de validacion del edge" in rendered
     assert "validation_sources.json" in rendered
     assert "Forecast consensus" in rendered

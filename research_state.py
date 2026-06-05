@@ -156,6 +156,53 @@ RESEARCH_STATE: Dict[str, Any] = {
             "blocks_champion": True,
         },
     ],
+    "edge_lab": [
+        {
+            "name": "Pre-FOMC drift",
+            "status": "conditional_candidate",
+            "evidence": "Lucca and Moench document positive U.S. equity returns before scheduled FOMC decisions; our local run found positive total return but failed the required 2013-2018 Sharpe gate.",
+            "source_name": "FRBNY Staff Report 512",
+            "source_url": "https://www.newyorkfed.org/research/staff_reports/sr512.html",
+            "implementation": "Keep as paper-only candidate; add USMPD windows, VIX/yield-curve filters, and broker-cost logs before any champion review.",
+            "promise_policy": "cannot_promise",
+        },
+        {
+            "name": "Macro announcement premium",
+            "status": "research_backlog",
+            "evidence": "Savor-Wilson style announcement-day premium exists in the literature, but the tradable implementation needs first-release actuals, consensus forecasts, and intraday fills.",
+            "source_name": "Savor-Wilson JFE 2014",
+            "source_url": "https://www.sciencedirect.com/journal/journal-of-financial-economics/vol/113/issue/2",
+            "implementation": "Archive forecasts now; backfill only with licensed historical consensus; reject daily-only proxies for T+120s execution claims.",
+            "promise_policy": "cannot_promise",
+        },
+        {
+            "name": "FOMC high-frequency shock model",
+            "status": "new_data_source",
+            "evidence": "The SF Fed USMPD provides public high-frequency FOMC event windows across rates, equities, dollar and inflation assets; this is the cleanest free upgrade for FOMC validation.",
+            "source_name": "SF Fed USMPD",
+            "source_url": "https://www.frbsf.org/research-and-insights/data-and-indicators/us-monetary-policy-event-study-database/",
+            "implementation": "Add USMPD ingestion and test whether policy surprises improve direction filters without look-ahead.",
+            "promise_policy": "cannot_promise",
+        },
+        {
+            "name": "Macro momentum overlay",
+            "status": "portfolio_candidate",
+            "evidence": "AQR describes macro momentum as a slower, diversified systematic macro approach; it is better suited to Chile/retail latency than news scalping.",
+            "source_name": "AQR macro momentum",
+            "source_url": "https://www.aqr.com/Insights/Research/White-Papers/A-Half-Century-of-Macro-Momentum",
+            "implementation": "Build a low-frequency overlay for risk-on/risk-off exposure; test separately from announcement scalps.",
+            "promise_policy": "cannot_promise",
+        },
+        {
+            "name": "Guarantee filter",
+            "status": "hard_stop",
+            "evidence": "CFTC, SEC and FINRA warn that guaranteed returns or secret trading systems are classic fraud signals. A serious system can target positive expectancy, not guaranteed profit.",
+            "source_name": "CFTC forex frauds",
+            "source_url": "https://www.cftc.gov/LearnAndProtect/forexfrauds",
+            "implementation": "The app must refuse any champion label until OOS, DSR, costs, paper-forward logs and drawdown rules pass.",
+            "promise_policy": "never_promise",
+        },
+    ],
 }
 
 
@@ -201,6 +248,24 @@ def _validation_source_lines() -> List[str]:
     return lines
 
 
+def _edge_lab_lines() -> List[str]:
+    lines: List[str] = []
+    for edge in RESEARCH_STATE["edge_lab"]:
+        lines.extend(
+            [
+                f"### {edge['name']}",
+                "",
+                f"- Status: `{edge['status']}`",
+                f"- Evidence: {edge['evidence']}",
+                f"- Source: [{edge['source_name']}]({edge['source_url']})",
+                f"- Implementation: {edge['implementation']}",
+                f"- Promise policy: `{edge['promise_policy']}`",
+                "",
+            ]
+        )
+    return lines
+
+
 def build_conditional_report_markdown() -> str:
     state = RESEARCH_STATE
     lines = [
@@ -233,6 +298,8 @@ def build_conditional_report_markdown() -> str:
     lines.extend(f"- `{penalty}`" for penalty in state["penalties"])
     lines.extend([""])
     lines.extend(_strategy_lines())
+    lines.extend(["## Edge lab", ""])
+    lines.extend(_edge_lab_lines())
     lines.extend(["## Fuentes de validacion", ""])
     lines.extend(_validation_source_lines())
     lines.extend(
