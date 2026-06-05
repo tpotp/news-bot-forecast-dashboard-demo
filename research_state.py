@@ -203,6 +203,67 @@ RESEARCH_STATE: Dict[str, Any] = {
             "promise_policy": "never_promise",
         },
     ],
+    "benchmark_lab": {
+        "title": "Benchmark Supremacy Contract",
+        "current_verdict": "not_superior_yet",
+        "definition": "A strategy can only be called superior if it beats the benchmark stack after costs, in every OOS regime, with acceptable drawdown and paper-forward evidence. No single backtest can crown it.",
+        "benchmarks": [
+            {
+                "name": "SG CTA / SG Trend Index",
+                "role": "Institutional managed-futures and trend-following yardstick.",
+                "source_name": "Societe Generale Prime Services Indices",
+                "source_url": "https://wholesale.banking.societegenerale.com/en/prime-services-indices/",
+                "bot_target": "Beat net OOS Sharpe and drawdown-adjusted return without using leverage hidden in the benchmark comparison.",
+                "status": "benchmark_defined",
+            },
+            {
+                "name": "HFR Macro Index family",
+                "role": "Global macro hedge fund peer group.",
+                "source_name": "HFRU Macro Index",
+                "source_url": "https://www.hfr.com/family-indices/hfru/",
+                "bot_target": "Outperform macro peer returns after fees/costs, and remain uncorrelated enough to be useful.",
+                "status": "benchmark_defined",
+            },
+            {
+                "name": "S&P 500 Total Return",
+                "role": "Passive equity alternative. If the bot cannot beat buy-and-hold on risk-adjusted terms, it is not worth the complexity.",
+                "source_name": "S&P Dow Jones Indices",
+                "source_url": "https://www.spglobal.com/spdji/en/indices/equity/sp-500/",
+                "bot_target": "Beat total return risk-adjusted performance, not only price return.",
+                "status": "benchmark_defined",
+            },
+            {
+                "name": "Cash / T-bill proxy",
+                "role": "Opportunity-cost floor for a strategy that may sit out many days.",
+                "source_name": "FRED Treasury Bill series",
+                "source_url": "https://fred.stlouisfed.org/",
+                "bot_target": "Excess return must remain positive after idle cash and broker costs.",
+                "status": "benchmark_defined",
+            },
+            {
+                "name": "No-trade baseline",
+                "role": "Fraud-control benchmark. The bot must prove trading beats doing nothing.",
+                "source_name": "Internal control",
+                "source_url": "https://news-bot-forecast-dashboard-demo.onrender.com/conditional_report.md",
+                "bot_target": "Positive net expectancy with enough trades and stable paper-forward logs.",
+                "status": "active_control",
+            },
+        ],
+        "superiority_gates": [
+            "Net OOS Sharpe >= 0.5 in each required OOS period.",
+            "Deflated Sharpe Ratio >= 0.95 after counting every tested variant.",
+            "At least 30 OOS trades per required period, or the result remains conditional.",
+            "Max drawdown and tail loss must be lower than the relevant benchmark stack at comparable volatility.",
+            "Paper-forward execution logs must match backtest assumptions for latency, spread, slippage and rejected orders.",
+            "No champion label if the edge relies on unavailable historical consensus forecasts or daily proxies for T+120s fills.",
+        ],
+        "next_engine_upgrades": [
+            "Benchmark ingest layer for SG/HFR public snapshots, S&P total return and cash proxy.",
+            "Tournament runner that compares every candidate against the benchmark stack using one frozen scoring function.",
+            "Risk allocator that scales exposure by volatility, drawdown state and event confidence instead of all-in signals.",
+            "Paper execution journal for IBKR Paper on port 7497, run locally or on a VPS with IB Gateway.",
+        ],
+    },
 }
 
 
@@ -266,6 +327,31 @@ def _edge_lab_lines() -> List[str]:
     return lines
 
 
+def _benchmark_lab_lines() -> List[str]:
+    lab = RESEARCH_STATE["benchmark_lab"]
+    lines: List[str] = [
+        f"## {lab['title']}",
+        "",
+        f"- Current verdict: `{lab['current_verdict']}`",
+        f"- Definition: {lab['definition']}",
+        "",
+        "### Benchmark stack",
+        "",
+    ]
+    for benchmark in lab["benchmarks"]:
+        lines.extend(
+            [
+                f"- **{benchmark['name']}** (`{benchmark['status']}`): {benchmark['role']} Source: [{benchmark['source_name']}]({benchmark['source_url']}). Target: {benchmark['bot_target']}",
+            ]
+        )
+    lines.extend(["", "### Superiority gates", ""])
+    lines.extend(f"- {gate}" for gate in lab["superiority_gates"])
+    lines.extend(["", "### Next engine upgrades", ""])
+    lines.extend(f"- {upgrade}" for upgrade in lab["next_engine_upgrades"])
+    lines.append("")
+    return lines
+
+
 def build_conditional_report_markdown() -> str:
     state = RESEARCH_STATE
     lines = [
@@ -298,6 +384,7 @@ def build_conditional_report_markdown() -> str:
     lines.extend(f"- `{penalty}`" for penalty in state["penalties"])
     lines.extend([""])
     lines.extend(_strategy_lines())
+    lines.extend(_benchmark_lab_lines())
     lines.extend(["## Edge lab", ""])
     lines.extend(_edge_lab_lines())
     lines.extend(["## Fuentes de validacion", ""])

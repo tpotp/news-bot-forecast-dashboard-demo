@@ -322,6 +322,49 @@ def _render_edge_lab() -> str:
     """
 
 
+def _render_benchmark_lab() -> str:
+    lab = RESEARCH_STATE["benchmark_lab"]
+    benchmark_rows = "\n".join(
+        f"""
+        <tr>
+          <td><strong>{html.escape(benchmark['name'])}</strong><br><a href="{html.escape(benchmark['source_url'], quote=True)}" target="_blank" rel="noreferrer">{html.escape(benchmark['source_name'])}</a></td>
+          <td>{html.escape(benchmark['role'])}</td>
+          <td>{html.escape(benchmark['bot_target'])}</td>
+          <td><span class="status waiting">{html.escape(benchmark['status'])}</span></td>
+        </tr>
+        """
+        for benchmark in lab["benchmarks"]
+    )
+    gates = "".join(f"<li>{html.escape(gate)}</li>" for gate in lab["superiority_gates"])
+    upgrades = "".join(f"<li>{html.escape(upgrade)}</li>" for upgrade in lab["next_engine_upgrades"])
+    return f"""
+      <section class="panel research-panel benchmark-panel">
+        <h2>{html.escape(lab['title'])}</h2>
+        <p class="note">{html.escape(lab['definition'])}</p>
+        <div class="verdict-strip">
+          <span>Veredicto actual</span>
+          <strong>{html.escape(lab['current_verdict'])}</strong>
+        </div>
+        <table class="benchmark-table">
+          <thead>
+            <tr><th>Benchmark</th><th>Por que importa</th><th>Objetivo del bot</th><th>Estado</th></tr>
+          </thead>
+          <tbody>{benchmark_rows}</tbody>
+        </table>
+        <div class="two-col benchmark-lists">
+          <section class="compact inner-block">
+            <h3>Gates para llamarlo superior</h3>
+            <ul>{gates}</ul>
+          </section>
+          <section class="compact inner-block">
+            <h3>Upgrades del motor</h3>
+            <ul>{upgrades}</ul>
+          </section>
+        </div>
+      </section>
+    """
+
+
 def _render_research_cockpit() -> str:
     state = RESEARCH_STATE
     penalties = "".join(f"<li>{html.escape(item)}</li>" for item in state["penalties"])
@@ -359,6 +402,7 @@ def _render_research_cockpit() -> str:
       <div class="warning-band">
         Paper trading solamente. Render no puede alcanzar IBKR Desktop local en 127.0.0.1:7497; live trading esta deshabilitado.
       </div>
+      {_render_benchmark_lab()}
       {_render_edge_lab()}
       {_render_validation_sources()}
       <section class="panel research-panel">
@@ -382,6 +426,7 @@ def _render_research_cockpit() -> str:
       </div>
       <div class="toolbar report-toolbar">
         <a class="button" href="/conditional_report.md">Ver conditional_report.md</a>
+        <a class="button" href="/benchmark_lab.json">Ver benchmark_lab.json</a>
         <a class="button" href="/edge_lab.json">Ver edge_lab.json</a>
         <a class="button" href="/validation_sources.json">Ver validation_sources.json</a>
         <a class="button" href="/healthz">Health check</a>
@@ -426,8 +471,13 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
     .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:auto; margin-top:12px; }}
     .research-panel {{ padding:14px; }}
     .compact {{ padding:14px; min-height:160px; }}
+    .inner-block {{ background:#171d27; border:1px solid var(--line); border-radius:8px; margin-top:12px; }}
+    h3 {{ margin:0 0 8px; font-size:15px; }}
     .two-col {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
     .report-toolbar {{ margin-top:12px; }}
+    .verdict-strip {{ display:flex; justify-content:space-between; gap:12px; align-items:center; background:#111827; border:1px solid var(--line); border-radius:8px; padding:11px; margin:12px 0; }}
+    .verdict-strip span {{ color:var(--muted); font-weight:800; }}
+    .verdict-strip strong {{ color:#fde68a; }}
     .gauge-wrap {{ width:170px; flex:0 0 170px; }}
     .gauge {{ position:relative; width:170px; height:96px; overflow:hidden; border-radius:170px 170px 0 0; background:conic-gradient(from 270deg at 50% 100%, #ef4444 0deg 60deg, #f59e0b 60deg 125deg, #22c55e 125deg 180deg); border:1px solid var(--line); }}
     .needle {{ position:absolute; bottom:0; left:50%; width:3px; height:78px; background:#f8fafc; transform-origin:bottom center; }}
@@ -436,6 +486,9 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
     .gauge-center span {{ color:var(--muted); font-size:12px; }}
     table {{ width:100%; border-collapse:collapse; min-width:1260px; }}
     .strategy-table {{ min-width:1040px; }}
+    .benchmark-table {{ min-width:1180px; }}
+    .benchmark-table a {{ color:#93c5fd; display:inline-block; margin-top:2px; text-decoration:none; font-weight:700; }}
+    .benchmark-table a:hover {{ text-decoration:underline; }}
     .edge-table {{ min-width:1180px; }}
     .edge-table a {{ color:#93c5fd; display:inline-block; margin-top:2px; text-decoration:none; font-weight:700; }}
     .edge-table a:hover {{ text-decoration:underline; }}
@@ -564,6 +617,10 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path.startswith("/conditional_report.md"):
             self._send_text(build_conditional_report_markdown(), content_type="text/markdown; charset=utf-8")
+            return
+        if self.path.startswith("/benchmark_lab.json"):
+            body = json.dumps(RESEARCH_STATE["benchmark_lab"], ensure_ascii=False, indent=2)
+            self._send_text(body, content_type="application/json; charset=utf-8")
             return
         if self.path.startswith("/edge_lab.json"):
             body = json.dumps(RESEARCH_STATE["edge_lab"], ensure_ascii=False, indent=2)

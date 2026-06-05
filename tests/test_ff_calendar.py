@@ -104,8 +104,20 @@ def test_edge_lab_keeps_guarantee_filter_as_hard_stop() -> None:
     assert guarantee_filter["promise_policy"] == "never_promise"
 
 
+def test_benchmark_lab_defines_institutional_stack() -> None:
+    lab = research_state.RESEARCH_STATE["benchmark_lab"]
+    benchmark_names = {benchmark["name"] for benchmark in lab["benchmarks"]}
+    assert lab["current_verdict"] == "not_superior_yet"
+    assert "SG CTA / SG Trend Index" in benchmark_names
+    assert "HFR Macro Index family" in benchmark_names
+    assert "S&P 500 Total Return" in benchmark_names
+
+
 def test_conditional_report_lists_validation_sources() -> None:
     report = research_state.build_conditional_report_markdown()
+    assert "## Benchmark Supremacy Contract" in report
+    assert "SG CTA / SG Trend Index" in report
+    assert "not_superior_yet" in report
     assert "## Edge lab" in report
     assert "SF Fed USMPD" in report
     assert "Guarantee filter" in report
@@ -117,6 +129,10 @@ def test_conditional_report_lists_validation_sources() -> None:
 
 def test_dashboard_renders_validation_source_matrix() -> None:
     rendered = forecast_dashboard.render_dashboard([])
+    assert "Benchmark Supremacy Contract" in rendered
+    assert "benchmark_lab.json" in rendered
+    assert "SG CTA / SG Trend Index" in rendered
+    assert "not_superior_yet" in rendered
     assert "Edge Lab: de humano ganador a sistema medible" in rendered
     assert "edge_lab.json" in rendered
     assert "FOMC high-frequency shock model" in rendered
