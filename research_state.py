@@ -99,6 +99,63 @@ RESEARCH_STATE: Dict[str, Any] = {
         "1-minute ES/SPY/USA500 data around NFP, CPI, and FOMC.",
         "Paper broker costs: spread, commission, observed slippage, and Valparaiso latency.",
     ],
+    "validation_sources": [
+        {
+            "category": "Official actuals",
+            "status": "partial",
+            "coverage": "BLS covers CPI and labor releases; BEA covers GDP/PCE; Fed covers FOMC decisions. These are authoritative but need first-release snapshots, not only revised history.",
+            "sources": [
+                {"name": "BLS Public Data API", "url": "https://www.bls.gov/bls/api_features.htm"},
+                {"name": "BEA Open Data/API", "url": "https://www.bea.gov/open-data"},
+                {"name": "Federal Reserve FOMC calendar", "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"},
+            ],
+            "next_step": "Automate official actual capture at release time and store immutable release snapshots.",
+            "blocks_champion": True,
+        },
+        {
+            "category": "Vintage macro history",
+            "status": "ok",
+            "coverage": "FRED/ALFRED can validate macro regimes and avoid look-ahead bias for many revised macro series.",
+            "sources": [
+                {"name": "FRED API", "url": "https://fred.stlouisfed.org/docs/api/fred/"},
+                {"name": "ALFRED vintages", "url": "https://alfred.stlouisfed.org/"},
+            ],
+            "next_step": "Keep using as-of dates for regime labels and document every series ID.",
+            "blocks_champion": False,
+        },
+        {
+            "category": "Forecast consensus",
+            "status": "missing",
+            "coverage": "This is the hard missing piece. ForexFactory is useful for forward operation, but historical consensus with timestamps must be archived or licensed.",
+            "sources": [
+                {"name": "ForexFactory calendar", "url": "https://www.forexfactory.com/calendar"},
+            ],
+            "next_step": "Start archiving weekly forecasts now; for historical tests, license a consensus feed or accept conditional_report.md.",
+            "blocks_champion": True,
+        },
+        {
+            "category": "Intraday market prices",
+            "status": "paid_needed",
+            "coverage": "T+120s validation needs 1-minute or tick data around announcements. Daily proxies are not enough for the Valparaiso latency rule.",
+            "sources": [
+                {"name": "CME DataMine", "url": "https://www.cmegroup.com/market-data/datamine-historical-data/index.html"},
+                {"name": "Databento historical API", "url": "https://databento.com/docs/api-reference-historical"},
+            ],
+            "next_step": "Load ES/SPY/USA500 1-minute bars for 2013-2024 around NFP, CPI, and FOMC before any champion claim.",
+            "blocks_champion": True,
+        },
+        {
+            "category": "Paper execution",
+            "status": "local_only",
+            "coverage": "IBKR Paper is valid for forward execution logs, but Render cannot connect to local TWS/IB Gateway at 127.0.0.1.",
+            "sources": [
+                {"name": "IBKR TWS API RTD docs", "url": "https://interactivebrokers.github.io/tws-api/tws_rtd_server.html"},
+                {"name": "IBKR TWS API tutorial", "url": "https://www.interactivebrokers.com/campus/ibkr-quant-news/an-introduction-to-tws-api-with-jupyter-notebooks/"},
+            ],
+            "next_step": "Run the executor locally or on a VPS that runs IB Gateway paper; keep live trading disabled.",
+            "blocks_champion": True,
+        },
+    ],
 }
 
 
@@ -119,6 +176,25 @@ def _strategy_lines() -> List[str]:
                 f"- DSR: `{strategy['dsr']:.4f}`",
                 f"- Accepted final: `{strategy['accepted']}`",
                 f"- Rejection/condition: `{strategy['rejection']}`",
+                "",
+            ]
+        )
+    return lines
+
+
+def _validation_source_lines() -> List[str]:
+    lines: List[str] = []
+    for source in RESEARCH_STATE["validation_sources"]:
+        links = ", ".join(f"[{item['name']}]({item['url']})" for item in source["sources"])
+        lines.extend(
+            [
+                f"### {source['category']}",
+                "",
+                f"- Status: `{source['status']}`",
+                f"- Blocks champion: `{source['blocks_champion']}`",
+                f"- Coverage: {source['coverage']}",
+                f"- Sources: {links}",
+                f"- Next step: {source['next_step']}",
                 "",
             ]
         )
@@ -157,6 +233,8 @@ def build_conditional_report_markdown() -> str:
     lines.extend(f"- `{penalty}`" for penalty in state["penalties"])
     lines.extend([""])
     lines.extend(_strategy_lines())
+    lines.extend(["## Fuentes de validacion", ""])
+    lines.extend(_validation_source_lines())
     lines.extend(
         [
             "## Datos necesarios para continuar",

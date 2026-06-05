@@ -4,6 +4,7 @@ from datetime import datetime
 
 import ff_calendar
 import forecast_dashboard
+import research_state
 
 
 def test_normalize_ff_event_uses_forecast_and_timezones() -> None:
@@ -87,3 +88,26 @@ def test_auth_cookie_validation_accepts_only_expected_token() -> None:
 def test_auth_cookie_validation_uses_default_demo_token() -> None:
     assert forecast_dashboard._configured_password_token() == forecast_dashboard.DEFAULT_DEMO_PASSWORD_TOKEN
     assert not forecast_dashboard._cookie_is_valid("")
+
+
+def test_validation_sources_make_missing_consensus_explicit() -> None:
+    sources = research_state.RESEARCH_STATE["validation_sources"]
+    consensus = next(source for source in sources if source["category"] == "Forecast consensus")
+    assert consensus["status"] == "missing"
+    assert consensus["blocks_champion"]
+
+
+def test_conditional_report_lists_validation_sources() -> None:
+    report = research_state.build_conditional_report_markdown()
+    assert "## Fuentes de validacion" in report
+    assert "BLS Public Data API" in report
+    assert "Forecast consensus" in report
+    assert "IBKR TWS API" in report
+
+
+def test_dashboard_renders_validation_source_matrix() -> None:
+    rendered = forecast_dashboard.render_dashboard([])
+    assert "Fuentes de validacion del edge" in rendered
+    assert "validation_sources.json" in rendered
+    assert "Forecast consensus" in rendered
+    assert "paid_needed" in rendered

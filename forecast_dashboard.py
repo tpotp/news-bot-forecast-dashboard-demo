@@ -131,6 +131,14 @@ def _signal_badge_class(signal: str) -> str:
     return "waiting"
 
 
+def _source_status_class(status: str) -> str:
+    if status == "ok":
+        return "ready"
+    if status in {"missing", "paid_needed"}:
+        return "danger"
+    return "waiting"
+
+
 def _configured_password() -> str:
     return os.environ.get("DASHBOARD_PASSWORD", "").strip()
 
@@ -251,6 +259,42 @@ def _render_score_gauge(score: int, label: str) -> str:
     """
 
 
+def _render_source_links(sources: List[Dict[str, str]]) -> str:
+    links = []
+    for source in sources:
+        name = html.escape(source["name"])
+        url = html.escape(source["url"], quote=True)
+        links.append(f'<a href="{url}" target="_blank" rel="noreferrer">{name}</a>')
+    return " ".join(links)
+
+
+def _render_validation_sources() -> str:
+    rows = "\n".join(
+        f"""
+        <tr>
+          <td><strong>{html.escape(source['category'])}</strong><br><span>{_render_source_links(source['sources'])}</span></td>
+          <td><span class="status {_source_status_class(source['status'])}">{html.escape(source['status'])}</span></td>
+          <td>{html.escape(source['coverage'])}</td>
+          <td>{html.escape(source['next_step'])}</td>
+          <td><span class="status {'danger' if source['blocks_champion'] else 'ready'}">{'bloquea' if source['blocks_champion'] else 'ok'}</span></td>
+        </tr>
+        """
+        for source in RESEARCH_STATE["validation_sources"]
+    )
+    return f"""
+      <section class="panel research-panel">
+        <h2>Fuentes de validacion del edge</h2>
+        <p class="note">Esta matriz separa evidencia util de piezas faltantes. Si una fila bloquea, el sistema queda en paper/conditional aunque una estrategia se vea rentable.</p>
+        <table class="source-table">
+          <thead>
+            <tr><th>Fuente</th><th>Estado</th><th>Que valida</th><th>Proximo paso</th><th>Champion</th></tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </section>
+    """
+
+
 def _render_research_cockpit() -> str:
     state = RESEARCH_STATE
     penalties = "".join(f"<li>{html.escape(item)}</li>" for item in state["penalties"])
@@ -288,6 +332,7 @@ def _render_research_cockpit() -> str:
       <div class="warning-band">
         Paper trading solamente. Render no puede alcanzar IBKR Desktop local en 127.0.0.1:7497; live trading esta deshabilitado.
       </div>
+      {_render_validation_sources()}
       <section class="panel research-panel">
         <h2>Estrategias V4</h2>
         <table class="strategy-table">
@@ -309,6 +354,7 @@ def _render_research_cockpit() -> str:
       </div>
       <div class="toolbar report-toolbar">
         <a class="button" href="/conditional_report.md">Ver conditional_report.md</a>
+        <a class="button" href="/validation_sources.json">Ver validation_sources.json</a>
         <a class="button" href="/healthz">Health check</a>
       </div>
     </section>
@@ -361,6 +407,9 @@ def render_dashboard(events: List[CalendarEvent], message: str = "") -> str:
     .gauge-center span {{ color:var(--muted); font-size:12px; }}
     table {{ width:100%; border-collapse:collapse; min-width:1260px; }}
     .strategy-table {{ min-width:1040px; }}
+    .source-table {{ min-width:1160px; }}
+    .source-table a {{ color:#93c5fd; display:inline-block; margin:2px 8px 0 0; text-decoration:none; font-weight:700; }}
+    .source-table a:hover {{ text-decoration:underline; }}
     th, td {{ border-bottom:1px solid var(--line); padding:10px; text-align:left; vertical-align:middle; font-size:13px; }}
     th {{ color:#bfdbfe; background:#161b24; position:sticky; top:0; }}
     td span {{ color:var(--muted); font-size:12px; }}
@@ -483,6 +532,10 @@ class ForecastHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path.startswith("/conditional_report.md"):
             self._send_text(build_conditional_report_markdown(), content_type="text/markdown; charset=utf-8")
+            return
+        if self.path.startswith("/validation_sources.json"):
+            body = json.dumps(RESEARCH_STATE["validation_sources"], ensure_ascii=False, indent=2)
+            self._send_text(body, content_type="application/json; charset=utf-8")
             return
         if self.path.startswith("/refresh") or not self.events:
             try:
